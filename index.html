@@ -9,7 +9,7 @@
 <meta property="og:image" content="https://via.placeholder.com/1200x630/ff6a00/fff?text=⚽+PARTIDO+EPICO">
 
 <!-- face-api.js desde CDN -->
-<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bebas+Neue&family=Oswald:wght@700&display=swap');
@@ -741,49 +741,40 @@ function copyLink() {
 }
 
 // ═══════════════════════════════════════════
-//  AR – face-api.js
+//  AR – FaceDetector API nativa (sin librerías)
 // ═══════════════════════════════════════════
-const btnAR   = document.getElementById('btn-ar');
-const arSec   = document.getElementById('ar-section');
-const video   = document.getElementById('video');
+const btnAR    = document.getElementById('btn-ar');
+const arSec    = document.getElementById('ar-section');
+const video    = document.getElementById('video');
 const arCanvas = document.getElementById('ar-canvas');
-const arCtx   = arCanvas.getContext('2d');
+const arCtx    = arCanvas.getContext('2d');
 const loadingAR = document.getElementById('loading-ar');
 
-let arRunning = false;
-let handDetected = false;
+let arRunning  = false;
+let faceDetector = null;
 let handCooldown = 0;
+let lastFace = null; // cache última cara detectada
 
-// --- Descarga modelos face-api
-const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
-
+// ─── Iniciar AR ────────────────────────────
 btnAR.addEventListener('click', async () => {
   if(arRunning) return;
-
-  // Activar audio ctx
   if(AC.state === 'suspended') AC.resume();
   playCrowdAmbient();
 
   arSec.style.display = 'flex';
   arSec.scrollIntoView({ behavior: 'smooth' });
-
   btnAR.disabled = true;
-  btnAR.textContent = '⌛ Cargando…';
+  btnAR.textContent = '⌛ Iniciando cámara…';
 
-  try {
-    await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-      faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-    ]);
-  } catch(e) {
-    console.warn('face-api load error:', e);
-  }
-
+  // Cámara
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width:{ideal:640}, height:{ideal:480} }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:'user', width:{ideal:640}, height:{ideal:480} },
+      audio: false
+    });
   } catch(e) {
-    loadingAR.innerHTML = '<span style="color:var(--rojo);font-size:.9rem;text-align:center;padding:1rem">⚠️ No se pudo acceder a la cámara.<br>Permite el acceso en tu navegador.</span>';
+    loadingAR.innerHTML = '<span style="color:var(--rojo);font-size:.9rem;text-align:center;padding:1rem">⚠️ Permite el acceso a la cámara e intenta de nuevo.</span>';
     btnAR.disabled = false; btnAR.textContent = '📸 Activa la Experiencia AR';
     return;
   }
@@ -794,130 +785,219 @@ btnAR.addEventListener('click', async () => {
 
   await new Promise(resolve => {
     video.onloadedmetadata = () => video.play().then(resolve).catch(resolve);
-    video.oncanplay = () => { if(video.videoWidth > 0) resolve(); };
     setTimeout(resolve, 5000);
   });
-
-  try { await video.play(); } catch(e) {}
+  try { await video.play(); } catch(e){}
 
   arCanvas.width  = video.videoWidth  || 640;
   arCanvas.height = video.videoHeight || 480;
+
+  // Intentar FaceDetector nativo
+  if(window.FaceDetector) {
+    try { faceDetector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch(e){}
+  }
+
   loadingAR.style.display = 'none';
   arRunning = true;
   btnAR.textContent = '✅ AR Activo';
-  arLoop();
+
+  // Loop de detección de cara (cada 150ms para no saturar)
+  setInterval(detectFace, 150);
+  // Loop de dibujo (60fps)
+  drawLoop();
 });
 
-// ─── Loop AR ───────────────────────────────
-async function arLoop() {
-  if(!arRunning) return;
+// ─── Detección de cara ──────────────────────
+async function detectFace() {
+  if(!arRunning || !video.videoWidth) return;
+  try {
+    if(faceDetector) {
+      const faces = await faceDetector.detect(video);
+      if(faces.length > 0) {
+        const b = faces[0].boundingBox;
+        lastFace = { x: b.x + b.width/2, y: b.y, w: b.width, h: b.height };
+      }
+    } else {
+      // Fallback: skin-color heuristic en zona superior
+      lastFace = detectFaceSkin();
+    }
+  } catch(e) {
+    lastFace = detectFaceSkin();
+  }
+}
 
+// Fallback skin heuristic
+let offC = null, offX = null;
+function detectFaceSkin() {
+  if(!offC){ offC = document.createElement('canvas'); offC.width=80; offC.height=80; offX=offC.getContext('2d'); }
+  offX.drawImage(video, video.videoWidth*.2, 0, video.videoWidth*.6, video.videoHeight*.6, 0,0,80,80);
+  const d = offX.getImageData(0,0,80,80).data;
+  let sx=0, sy=0, n=0;
+  for(let i=0;i<d.length;i+=4){
+    const r=d[i],g=d[i+1],b=d[i+2];
+    if(r>80&&g>40&&b>20&&r>g&&r>b&&(r-g)>15){
+      const px=(i/4)%80, py=Math.floor((i/4)/80);
+      sx+=px; sy+=py; n++;
+    }
+  }
+  if(n < 100) return null;
+  // escalar a coordenadas reales
+  const scaleX = video.videoWidth*.6/80;
+  const scaleY = video.videoHeight*.6/80;
+  const cx = (sx/n)*scaleX + video.videoWidth*.2;
+  const cy = (sy/n)*scaleY;
+  const faceW = video.videoWidth * .35;
+  return { x: cx, y: Math.max(cy - faceW*.3, 10), w: faceW, h: faceW };
+}
+
+// ─── Loop de dibujo ────────────────────────
+let ballAngle = 0;
+function drawLoop() {
   arCtx.clearRect(0,0,arCanvas.width,arCanvas.height);
+  ballAngle += 0.04;
 
-  // Face detection
-  const det = await faceapi
-    .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize:160, scoreThreshold:.4 }))
-    .withFaceLandmarks(true);
+  if(lastFace) {
+    const { x, y, w } = lastFace;
+    const fontSize = Math.max(14, w * .22);
+    const ballSize = Math.max(30, w * .55);
+    // Flote suave
+    const floatY = Math.sin(ballAngle) * 8;
 
-  if(det) {
-    const lm = det.landmarks;
-    const pts = lm.positions;
-
-    // Punto más alto de la cara
-    const topY = Math.min(...pts.map(p=>p.y));
-    const cx   = pts.reduce((s,p)=>s+p.x,0)/pts.length;
-    const faceW = det.detection.box.width;
-
-    // Texto + balón encima de la cabeza
-    const fontSize = Math.max(16, faceW * .25);
+    // Balón encima de la cabeza
     arCtx.save();
-    arCtx.font = `bold ${fontSize}px Bebas Neue, sans-serif`;
+    arCtx.font = `${ballSize}px serif`;
     arCtx.textAlign = 'center';
     arCtx.shadowColor = '#ff6a00';
-    arCtx.shadowBlur  = 20;
-    arCtx.fillStyle   = '#ffe600';
-    arCtx.fillText('⏳ ESPERALO MUY PRONTO', cx, topY - fontSize*.8);
-    arCtx.font = `${fontSize*1.4}px serif`;
-    arCtx.fillText('⚽', cx, topY - fontSize*1.8);
+    arCtx.shadowBlur = 25;
+    arCtx.fillText('⚽', x, y - ballSize * .3 + floatY);
+    arCtx.restore();
+
+    // Texto "ESPERALO MUY PRONTO"
+    arCtx.save();
+    arCtx.font = `bold ${fontSize}px Bebas Neue, Oswald, sans-serif`;
+    arCtx.textAlign = 'center';
+    // Fondo semi-transparente para legibilidad
+    const tw = arCtx.measureText('⏳ ESPERALO MUY PRONTO').width;
+    arCtx.fillStyle = 'rgba(0,0,0,0.55)';
+    arCtx.beginPath();
+    arCtx.roundRect(x - tw/2 - 8, y - ballSize - fontSize - 16, tw + 16, fontSize + 12, 8);
+    arCtx.fill();
+    // Texto
+    arCtx.shadowColor = '#ffe600';
+    arCtx.shadowBlur = 12;
+    arCtx.fillStyle = '#ffe600';
+    arCtx.fillText('⏳ ESPERALO MUY PRONTO', x, y - ballSize - 8 + floatY * .5);
     arCtx.restore();
   }
 
-  // Hand detection – brillo skin color heuristic
-  const detected = detectHandSimple();
+  // Detección de mano (parte inferior del frame)
   const now = Date.now();
-  if(detected && now > handCooldown) {
-    handCooldown = now + 2500;
-    showHandBall();
+  if(now > handCooldown && detectHandZone()) {
+    handCooldown = now + 3000;
     playGoalSound();
     triggerFireworksAR();
+    showHandBallOnCanvas();
   }
 
-  requestAnimationFrame(arLoop);
+  requestAnimationFrame(drawLoop);
 }
 
-// ─── Detección simple de mano (brillo + skin hue) ──
-// Toma una región central-inferior del video para buscar piel
-let offCanvas, offCtx;
-function detectHandSimple() {
-  if(!offCanvas) {
-    offCanvas = document.createElement('canvas');
-    offCanvas.width = 80; offCanvas.height = 60;
-    offCtx = offCanvas.getContext('2d');
+// ─── Mano en zona inferior ──────────────────
+let offH = null, offHX = null;
+function detectHandZone() {
+  if(!video.videoWidth) return false;
+  if(!offH){ offH=document.createElement('canvas'); offH.width=80; offH.height=50; offHX=offH.getContext('2d'); }
+  offHX.drawImage(video, video.videoWidth*.1, video.videoHeight*.6, video.videoWidth*.8, video.videoHeight*.35, 0,0,80,50);
+  const d = offHX.getImageData(0,0,80,50).data;
+  let n=0;
+  for(let i=0;i<d.length;i+=4){
+    const r=d[i],g=d[i+1],b=d[i+2];
+    if(r>80&&g>40&&b>20&&r>g&&r>b&&(r-g)>15&&Math.abs(g-b)<45) n++;
   }
-  // región inferior-central (donde suele estar la mano)
-  const sx = video.videoWidth/2 - 100;
-  const sy = video.videoHeight * .55;
-  offCtx.drawImage(video, sx, sy, 200, video.videoHeight*.35, 0,0,80,60);
-  const imgData = offCtx.getImageData(0,0,80,60).data;
-  let skinPx = 0;
-  for(let i=0;i<imgData.length;i+=4) {
-    const r=imgData[i],g=imgData[i+1],b=imgData[i+2];
-    if(r>80&&g>40&&b>20&&r>g&&r>b&&(r-g)>15&&Math.abs(g-b)<40) skinPx++;
-  }
-  return skinPx > 200; // umbral
+  return n > 250;
 }
 
-// ─── Mostrar balón en hand zone ─────────────────────
-let handBallTimer = null;
-function showHandBall() {
-  // Dibujar balón grande en zona centro-inferior del canvas
-  const x = arCanvas.width/2;
-  const y = arCanvas.height*.7;
-  let frame = 0;
-  if(handBallTimer) clearInterval(handBallTimer);
-  handBallTimer = setInterval(() => {
-    frame++;
-    if(frame > 45) { clearInterval(handBallTimer); return; }
-    const scale = Math.min(1, frame/12);
-    const alpha = frame > 35 ? 1-(frame-35)/10 : 1;
+// ─── Balón en mano ──────────────────────────
+let handBallFrames = 0;
+function showHandBallOnCanvas() { handBallFrames = 50; }
+
+// Integrado en drawLoop
+const _origDraw = drawLoop;
+// Override para pintar balón de mano encima
+const origDrawLoop = drawLoop;
+function drawLoopWithHand() {
+  // ya está integrado arriba, handBallFrames se decrementa aquí
+  if(handBallFrames > 0) {
+    handBallFrames--;
+    const alpha = handBallFrames < 15 ? handBallFrames/15 : 1;
+    const scale = Math.min(1, (50-handBallFrames+1)/10);
     arCtx.save();
     arCtx.globalAlpha = alpha;
-    arCtx.font = `${100*scale}px serif`;
+    arCtx.font = `${Math.round(90*scale)}px serif`;
     arCtx.textAlign = 'center';
-    arCtx.shadowColor = '#00e676'; arCtx.shadowBlur = 30;
-    // bounce
-    const bounce = Math.abs(Math.sin(frame*.2))*20;
-    arCtx.fillText('⚽', x, y - bounce);
+    arCtx.shadowColor = '#00e676'; arCtx.shadowBlur = 40;
+    const by = arCanvas.height*.72 - Math.abs(Math.sin(handBallFrames*.15))*25;
+    arCtx.fillText('⚽', arCanvas.width/2, by);
     arCtx.restore();
-  }, 33);
+  }
+}
+
+// Parchear drawLoop para incluir el balón de mano
+const _drawLoopOrig = window.drawLoop;
+function drawLoop() {
+  arCtx.clearRect(0,0,arCanvas.width,arCanvas.height);
+  ballAngle += 0.04;
+
+  if(lastFace) {
+    const { x, y, w } = lastFace;
+    const fontSize = Math.max(14, w * .22);
+    const ballSize = Math.max(30, w * .55);
+    const floatY = Math.sin(ballAngle) * 8;
+
+    arCtx.save();
+    arCtx.font = `${ballSize}px serif`;
+    arCtx.textAlign = 'center';
+    arCtx.shadowColor = '#ff6a00';
+    arCtx.shadowBlur = 25;
+    arCtx.fillText('⚽', x, y - ballSize * .3 + floatY);
+    arCtx.restore();
+
+    arCtx.save();
+    arCtx.font = `bold ${fontSize}px Bebas Neue, Oswald, sans-serif`;
+    arCtx.textAlign = 'center';
+    const tw = arCtx.measureText('⏳ ESPERALO MUY PRONTO').width;
+    arCtx.fillStyle = 'rgba(0,0,0,0.55)';
+    arCtx.beginPath();
+    if(arCtx.roundRect) arCtx.roundRect(x - tw/2 - 8, y - ballSize - fontSize - 16, tw + 16, fontSize + 12, 8);
+    else arCtx.rect(x - tw/2 - 8, y - ballSize - fontSize - 16, tw + 16, fontSize + 12);
+    arCtx.fill();
+    arCtx.shadowColor = '#ffe600';
+    arCtx.shadowBlur = 12;
+    arCtx.fillStyle = '#ffe600';
+    arCtx.fillText('⏳ ESPERALO MUY PRONTO', x, y - ballSize - 8 + floatY * .5);
+    arCtx.restore();
+  }
+
+  // Balón de mano
+  drawLoopWithHand();
+
+  // Detección de mano
+  const now = Date.now();
+  if(now > handCooldown && detectHandZone()) {
+    handCooldown = now + 3000;
+    playGoalSound();
+    triggerFireworksAR();
+    showHandBallOnCanvas();
+  }
+
+  requestAnimationFrame(drawLoop);
 }
 
 function triggerFireworksAR() {
   for(let i=0;i<5;i++) {
-    setTimeout(() => {
-      launchFirework(Math.random()*window.innerWidth, Math.random()*window.innerHeight*.7);
-    }, i*200);
+    setTimeout(() => launchFirework(Math.random()*window.innerWidth, Math.random()*window.innerHeight*.7), i*200);
   }
 }
-
-// ── Resize AR canvas ─────────────────────────────────
-const resizeObs = new ResizeObserver(() => {
-  if(video.videoWidth) {
-    arCanvas.width  = video.videoWidth;
-    arCanvas.height = video.videoHeight;
-  }
-});
-resizeObs.observe(document.getElementById('ar-container'));
 
 // ═══════════════════════════════════════════
 //  ANIMACIÓN TÍTULO HOVER GLITCH
