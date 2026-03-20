@@ -239,13 +239,15 @@
 
   #video {
     width: 100%; display: block;
-    transform: scaleX(-1); /* espejo */
+    transform: scaleX(-1);
+    position: relative; z-index: 1;
+    min-height: 280px; background: #000;
   }
 
   #ar-canvas {
     position: absolute; top: 0; left: 0;
     width: 100%; height: 100%;
-    pointer-events: none;
+    pointer-events: none; z-index: 2;
   }
 
   #loading-ar {
@@ -777,23 +779,33 @@ btnAR.addEventListener('click', async () => {
     console.warn('face-api load error:', e);
   }
 
+  let stream;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-    video.srcObject = stream;
-    await video.play();
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width:{ideal:640}, height:{ideal:480} }, audio: false });
   } catch(e) {
     loadingAR.innerHTML = '<span style="color:var(--rojo);font-size:.9rem;text-align:center;padding:1rem">⚠️ No se pudo acceder a la cámara.<br>Permite el acceso en tu navegador.</span>';
+    btnAR.disabled = false; btnAR.textContent = '📸 Activa la Experiencia AR';
     return;
   }
 
-  video.addEventListener('loadedmetadata', () => {
-    arCanvas.width  = video.videoWidth;
-    arCanvas.height = video.videoHeight;
-    loadingAR.style.display = 'none';
-    arRunning = true;
-    btnAR.textContent = '✅ AR Activo';
-    arLoop();
+  video.srcObject = stream;
+  video.muted = true;
+  video.setAttribute('playsinline','');
+
+  await new Promise(resolve => {
+    video.onloadedmetadata = () => video.play().then(resolve).catch(resolve);
+    video.oncanplay = () => { if(video.videoWidth > 0) resolve(); };
+    setTimeout(resolve, 5000);
   });
+
+  try { await video.play(); } catch(e) {}
+
+  arCanvas.width  = video.videoWidth  || 640;
+  arCanvas.height = video.videoHeight || 480;
+  loadingAR.style.display = 'none';
+  arRunning = true;
+  btnAR.textContent = '✅ AR Activo';
+  arLoop();
 });
 
 // ─── Loop AR ───────────────────────────────
@@ -819,18 +831,14 @@ async function arLoop() {
     // Texto + balón encima de la cabeza
     const fontSize = Math.max(16, faceW * .25);
     arCtx.save();
-    arCtx.scale(-1,1); // reflejo para canvas
     arCtx.font = `bold ${fontSize}px Bebas Neue, sans-serif`;
     arCtx.textAlign = 'center';
-
-    // Sombra glow
     arCtx.shadowColor = '#ff6a00';
     arCtx.shadowBlur  = 20;
     arCtx.fillStyle   = '#ffe600';
-    const mirrorX = -(arCanvas.width - cx);
-    arCtx.fillText('⏳ ESPERALO MUY PRONTO', mirrorX, topY - fontSize*.8);
+    arCtx.fillText('⏳ ESPERALO MUY PRONTO', cx, topY - fontSize*.8);
     arCtx.font = `${fontSize*1.4}px serif`;
-    arCtx.fillText('⚽', mirrorX, topY - fontSize*1.8);
+    arCtx.fillText('⚽', cx, topY - fontSize*1.8);
     arCtx.restore();
   }
 
