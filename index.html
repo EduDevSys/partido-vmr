@@ -458,7 +458,7 @@
       <button class="btn-ar" id="btn-ar">
         📸 Activa la Experiencia AR
       </button>
-      <p class="hint-text">Pon tu cara frente a la cámara · Muestra tu mano</p>
+      <p class="hint-text">Pon tu cara frente a la cámara y descubre la experiencia</p>
     </div>
 
     <div id="scroll-hint">
@@ -479,8 +479,7 @@
       </div>
     </div>
     <div id="ar-instructions">
-      🎯 <strong>Cara</strong>: te colocamos la experiencia sobre tu cabeza<br>
-      ✋ <strong>Mano abierta</strong>: aparece un balón + sonido de gol
+      🎯 <strong>Pon tu cara frente a la cámara</strong> y mira la magia ✨
     </div>
     <p class="ar-label">Experiencia AR en tiempo real • cámara frontal</p>
   </section>
@@ -519,10 +518,10 @@
   <section id="share-section">
     <div class="share-title">🔥 ¡Comparte y genera el Hype!</div>
     <div class="share-btns">
-      <button class="share-btn whatsapp" onclick="shareWA()">💬 WhatsApp</button>
-      <button class="share-btn twitter"  onclick="shareTwitter()">🐦 Twitter / X</button>
-      <button class="share-btn fb"       onclick="shareFB()">👍 Facebook</button>
-      <button class="share-btn copy"     onclick="copyLink()">🔗 Copiar link</button>
+      <button class="share-btn whatsapp" onclick="shareWA()">WhatsApp</button>
+      <button class="share-btn twitter"  onclick="shareTwitter()">Twitter / X</button>
+      <button class="share-btn fb"       onclick="shareFB()">Facebook</button>
+      <button class="share-btn copy" id="copy-btn" onclick="copyLink()">Copiar link</button>
     </div>
   </section>
 
@@ -727,17 +726,18 @@ updateTicker();
 // ═══════════════════════════════════════════
 //  SHARE
 // ═══════════════════════════════════════════
-const shareText = '⚽🔥 ¡EL PARTIDO MÁS GRANDE VIENE AL ESTADIO VÍCTOR MANUEL REYNA! ¡Comparte y genera el hype! 🏟️ #EstadioVMR #Chiapas';
+const shareText = 'EL PARTIDO MAS GRANDE VIENE AL ESTADIO VICTOR MANUEL REYNA! Comparte y genera el hype! #EstadioVMR #Chiapas #FutbolChiapas';
 const shareURL = window.location.href;
 
 function shareWA()      { window.open('https://wa.me/?text='+encodeURIComponent(shareText+' '+shareURL)); }
 function shareTwitter() { window.open('https://twitter.com/intent/tweet?text='+encodeURIComponent(shareText)+'&url='+encodeURIComponent(shareURL)); }
 function shareFB()      { window.open('https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(shareURL)); }
 function copyLink() {
-  navigator.clipboard.writeText(shareURL);
-  const btn = document.querySelector('.share-btn.copy');
-  btn.textContent = '✅ ¡Copiado!';
-  setTimeout(() => btn.textContent = '🔗 Copiar link', 2000);
+  navigator.clipboard.writeText(shareURL).catch(()=>{});
+  const btn = document.getElementById('copy-btn');
+  btn.textContent = 'Copiado!';
+  btn.style.background = 'var(--verde)'; btn.style.color='#000';
+  setTimeout(() => { btn.textContent = 'Copiar link'; btn.style.background=''; btn.style.color=''; }, 2000);
 }
 
 // ═══════════════════════════════════════════
@@ -902,92 +902,136 @@ function drawLoop() {
   requestAnimationFrame(drawLoop);
 }
 
-// ─── Mano en zona inferior ──────────────────
-let offH = null, offHX = null;
-function detectHandZone() {
-  if(!video.videoWidth) return false;
-  if(!offH){ offH=document.createElement('canvas'); offH.width=80; offH.height=50; offHX=offH.getContext('2d'); }
-  offHX.drawImage(video, video.videoWidth*.1, video.videoHeight*.6, video.videoWidth*.8, video.videoHeight*.35, 0,0,80,50);
-  const d = offHX.getImageData(0,0,80,50).data;
-  let n=0;
-  for(let i=0;i<d.length;i+=4){
-    const r=d[i],g=d[i+1],b=d[i+2];
-    if(r>80&&g>40&&b>20&&r>g&&r>b&&(r-g)>15&&Math.abs(g-b)<45) n++;
-  }
-  return n > 250;
-}
+// ─── Loop principal ───────────────────────
+// Variables de animación de texto
+let glowPhase = 0;
+let scalePhase = 0;
+let sparkles = [];
+let textColorPhase = 0;
 
-// ─── Balón en mano ──────────────────────────
-let handBallFrames = 0;
-function showHandBallOnCanvas() { handBallFrames = 50; }
-
-// Integrado en drawLoop
-const _origDraw = drawLoop;
-// Override para pintar balón de mano encima
-const origDrawLoop = drawLoop;
-function drawLoopWithHand() {
-  // ya está integrado arriba, handBallFrames se decrementa aquí
-  if(handBallFrames > 0) {
-    handBallFrames--;
-    const alpha = handBallFrames < 15 ? handBallFrames/15 : 1;
-    const scale = Math.min(1, (50-handBallFrames+1)/10);
-    arCtx.save();
-    arCtx.globalAlpha = alpha;
-    arCtx.font = `${Math.round(90*scale)}px serif`;
-    arCtx.textAlign = 'center';
-    arCtx.shadowColor = '#00e676'; arCtx.shadowBlur = 40;
-    const by = arCanvas.height*.72 - Math.abs(Math.sin(handBallFrames*.15))*25;
-    arCtx.fillText('⚽', arCanvas.width/2, by);
-    arCtx.restore();
+function spawnTextSparkle(x, y, w) {
+  for(let i=0;i<3;i++){
+    sparkles.push({
+      x: x - w/2 + Math.random()*w,
+      y: y - Math.random()*30,
+      vx: (Math.random()-.5)*2,
+      vy: -1 - Math.random()*2,
+      life: 1,
+      size: 3 + Math.random()*5,
+      color: ['#ffe600','#ff6a00','#ff1744','#fff','#00e676'][Math.floor(Math.random()*5)]
+    });
   }
 }
 
-// Parchear drawLoop para incluir el balón de mano
-const _drawLoopOrig = window.drawLoop;
 function drawLoop() {
   arCtx.clearRect(0,0,arCanvas.width,arCanvas.height);
-  ballAngle += 0.04;
+  ballAngle   += 0.045;
+  glowPhase   += 0.06;
+  scalePhase  += 0.04;
+  textColorPhase += 0.03;
 
   if(lastFace) {
     const { x, y, w } = lastFace;
-    const fontSize = Math.max(14, w * .22);
-    const ballSize = Math.max(30, w * .55);
-    const floatY = Math.sin(ballAngle) * 8;
+    const ballSize = Math.max(36, w * .58);
+    const fontSize = Math.max(13, w * .21);
+    const floatY   = Math.sin(ballAngle) * 10;
 
+    // ── Balón flotando encima ──
     arCtx.save();
     arCtx.font = `${ballSize}px serif`;
     arCtx.textAlign = 'center';
     arCtx.shadowColor = '#ff6a00';
-    arCtx.shadowBlur = 25;
-    arCtx.fillText('⚽', x, y - ballSize * .3 + floatY);
+    arCtx.shadowBlur  = 30 + Math.sin(glowPhase)*15;
+    arCtx.fillText('⚽', x, y - ballSize*.35 + floatY);
     arCtx.restore();
 
+    // ── Sparkles alrededor del balón ──
+    if(Math.random() < .4) spawnTextSparkle(x, y - ballSize*.35 + floatY, ballSize*.8);
+
+    // ── Píldora de fondo animada ──
+    const text1 = 'ESPERALO MUY PRONTO';
+    const text2 = '⚽';
+    arCtx.save();
+    arCtx.font = `bold ${fontSize}px Bebas Neue, Oswald, sans-serif`;
+    const tw = arCtx.measureText(text1).width;
+    const pillX = x - tw/2 - 14;
+    const pillY = y - ballSize - fontSize - 22;
+    const pillW = tw + 28;
+    const pillH = fontSize + 18;
+
+    // Glow pulsante detrás de la píldora
+    const glowIntensity = 0.3 + Math.abs(Math.sin(glowPhase)) * 0.4;
+    arCtx.shadowColor = '#ff6a00';
+    arCtx.shadowBlur  = 20 + Math.sin(glowPhase)*20;
+
+    // Gradiente de fondo de la píldora
+    const grad = arCtx.createLinearGradient(pillX, pillY, pillX+pillW, pillY+pillH);
+    grad.addColorStop(0,   `rgba(255,26,68,${0.75 + Math.sin(glowPhase)*.1})`);
+    grad.addColorStop(0.5, `rgba(255,106,0,${0.8})`);
+    grad.addColorStop(1,   `rgba(255,26,68,${0.75 + Math.cos(glowPhase)*.1})`);
+    arCtx.fillStyle = grad;
+    arCtx.beginPath();
+    if(arCtx.roundRect) arCtx.roundRect(pillX, pillY, pillW, pillH, pillH/2);
+    else arCtx.rect(pillX, pillY, pillW, pillH);
+    arCtx.fill();
+
+    // Borde brillante
+    const borderGrad = arCtx.createLinearGradient(pillX, pillY, pillX+pillW, pillY+pillH);
+    borderGrad.addColorStop(0,   '#ffe600');
+    borderGrad.addColorStop(0.5, '#ffffff');
+    borderGrad.addColorStop(1,   '#ffe600');
+    arCtx.strokeStyle = borderGrad;
+    arCtx.lineWidth   = 2.5;
+    arCtx.shadowColor = '#ffe600';
+    arCtx.shadowBlur  = 10;
+    arCtx.stroke();
+
+    // Shimmer sweep
+    const shimmerX = ((Date.now() % 1200) / 1200) * (pillW + 60) - 30;
+    const shimmer  = arCtx.createLinearGradient(pillX+shimmerX-20, pillY, pillX+shimmerX+20, pillY);
+    shimmer.addColorStop(0,   'rgba(255,255,255,0)');
+    shimmer.addColorStop(0.5, 'rgba(255,255,255,0.35)');
+    shimmer.addColorStop(1,   'rgba(255,255,255,0)');
+    arCtx.fillStyle = shimmer;
+    arCtx.beginPath();
+    if(arCtx.roundRect) arCtx.roundRect(pillX, pillY, pillW, pillH, pillH/2);
+    else arCtx.rect(pillX, pillY, pillW, pillH);
+    arCtx.fill();
+    arCtx.restore();
+
+    // ── Texto principal con color ciclico ──
     arCtx.save();
     arCtx.font = `bold ${fontSize}px Bebas Neue, Oswald, sans-serif`;
     arCtx.textAlign = 'center';
-    const tw = arCtx.measureText('⏳ ESPERALO MUY PRONTO').width;
-    arCtx.fillStyle = 'rgba(0,0,0,0.55)';
-    arCtx.beginPath();
-    if(arCtx.roundRect) arCtx.roundRect(x - tw/2 - 8, y - ballSize - fontSize - 16, tw + 16, fontSize + 12, 8);
-    else arCtx.rect(x - tw/2 - 8, y - ballSize - fontSize - 16, tw + 16, fontSize + 12);
-    arCtx.fill();
-    arCtx.shadowColor = '#ffe600';
-    arCtx.shadowBlur = 12;
-    arCtx.fillStyle = '#ffe600';
-    arCtx.fillText('⏳ ESPERALO MUY PRONTO', x, y - ballSize - 8 + floatY * .5);
+    // Ciclo de color: amarillo → blanco → amarillo
+    const cr = 255;
+    const cg = Math.round(200 + Math.sin(textColorPhase)*55);
+    arCtx.fillStyle = `rgb(${cr},${cg},50)`;
+    arCtx.shadowColor = 'rgba(0,0,0,0.9)';
+    arCtx.shadowBlur  = 4;
+    arCtx.shadowOffsetX = 1; arCtx.shadowOffsetY = 1;
+    // Escala leve pulsante
+    const sc = 1 + Math.sin(scalePhase) * 0.03;
+    arCtx.translate(x, pillY + pillH/2 + fontSize*.35);
+    arCtx.scale(sc, sc);
+    arCtx.fillText(text1, 0, 0);
     arCtx.restore();
-  }
 
-  // Balón de mano
-  drawLoopWithHand();
-
-  // Detección de mano
-  const now = Date.now();
-  if(now > handCooldown && detectHandZone()) {
-    handCooldown = now + 3000;
-    playGoalSound();
-    triggerFireworksAR();
-    showHandBallOnCanvas();
+    // ── Partículas sparkle ──
+    for(let i = sparkles.length-1; i >= 0; i--) {
+      const sp = sparkles[i];
+      sp.x += sp.vx; sp.y += sp.vy; sp.life -= 0.03;
+      if(sp.life <= 0) { sparkles.splice(i,1); continue; }
+      arCtx.save();
+      arCtx.globalAlpha = sp.life;
+      arCtx.fillStyle   = sp.color;
+      arCtx.shadowColor = sp.color;
+      arCtx.shadowBlur  = 8;
+      arCtx.beginPath();
+      arCtx.arc(sp.x, sp.y, sp.size * sp.life, 0, Math.PI*2);
+      arCtx.fill();
+      arCtx.restore();
+    }
   }
 
   requestAnimationFrame(drawLoop);
